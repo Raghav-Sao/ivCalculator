@@ -2,7 +2,11 @@ from flask import Flask, request, jsonify
 import pandas as pd
 import numpy as np
 from scipy.stats import norm
+import datetime
+# To calculate IV
+import mibian
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 1024
 
 def newtons_method(f, fprime, R = 0, max_iter = 1000, tol=1e-3, args = [], debug = False):
     count = 0
@@ -89,63 +93,97 @@ def calculate_vega(sigma, args):
 
     return np.where(f_value > 0)
 
-@app.route('/getmsg/', methods=['GET'])
-def respond():
-    # Retrieve the name from the url parameter /getmsg/?name=
-    name = request.args.get("name", None)
 
-    # For debugging
-    print(f"Received: {name}")
-
-    S = 17664                    #  Index price
-    K = 17800                       #  Strike price
-    r = 0.0293                      #  Risk-free rate
-    t = 6 / 365                    #  Time until expiration
-    C0 = (105 + 106) / 2      #  Call price taken to be the midprice between the bid and ask
-
-    args = (S, K, r, t, C0)         #  These need to be packaged into a tuple for our Black Scholes and Newtons code
-    #  Solve the problem
-    sigma, count = newtons_method(call_objective_function, calculate_vega, 0.50, args = args)
-    # print(sigma)
-    response = {}
-
-    # Check if the user sent a name at all
-    if not name:
-        response["ERROR"] = "No name found. Please send a name."
-    # Check if the user entered a number
-    elif str(name).isdigit():
-        response["ERROR"] = "The name can't be numeric. Please send a string."
-    else:
-        response["MESSAGE"] = f"Welcome {sigma} to our awesome API!!!"
-
-    # Return the response in json format
-    return jsonify(response)
-
-
-@app.route('/post/', methods=['POST'])
+@app.route('/iv/', methods=['POST'])
 def post_something():
-    param = request.form.get('name')
-    print(param)
-    # You can add the test cases you made in the previous function, but in our case here you are just testing the POST functionality
-    if param:
+    try:
+        reqData = request.get_json()
+        print(reqData)
+        strike = reqData['strike']
+        currentPrice = reqData['currentPrice']
+        optionPrice = reqData['optionPrice']
+        iRate = reqData['iRate']
+        time = reqData['time']
+        optionType = reqData['optionType'] or 'CE';
+        # strike = 17800
+        print(strike, strike)
+        # currentPrice = 17700
+        # optionPrice = (105 + 106) / 2  
+        # iRate = 0.0293 
+        # time = 6/365
+    except Exception as e:
+        print(e)
         return jsonify({
-            "Message": f"Welcome {name} to our awesome API!",
-            # Add this option to distinct the POST request
-            "METHOD": "POST"
+            "ERROR": "eeplease pass all params: strike, currentPrice,optionPrice, iRate, time "
+        })
+
+    args = (strike, currentPrice, iRate, 6/365, optionPrice)
+    # sigma, count = newtons_method(call_objective_function if optionType == "CE" else put_objective_function, calculate_vega, 0.50, args = args)
+    sigma, count = newtons_method(put_objective_function, calculate_vega, 0.50, args = args)
+    # print(param)
+    # You can add the test cases you made in the previous function, but in our case here you are just testing the POST functionality
+    if strike and currentPrice and iRate and time and optionPrice:
+        return jsonify({
+            "iv": sigma,
+            "count": count
         })
     else:
         return jsonify({
-            "ERROR": "No name found. Please send a name."
+            strike,currentPrice, iRate,time,optionPrice,
+           
         })
+
+@app.route('/new-iv/', methods=['POST'])
+def newIv():
+    try:
+        resData = {}
+        reqData = request.get_json()
+        print("before")
+        for optionData in reqData:
+            strike = optionData['strike']
+            currentPrice = optionData['currentPrice']
+            optionPrice = optionData['optionPrice']
+            iRate = optionData['iRate']
+            key = optionData['key']
+            time = optionData['time']
+            exactTime = optionData['exactTime']
+            optionType = optionData['optionType'] or 'CE';
+            c = mibian.BS([currentPrice, strike, iRate, time],callPrice=optionPrice) if optionType == 'CE' else mibian.BS([currentPrice, strike, iRate, time],putPrice=optionPrice)
+            cExact = mibian.BS([currentPrice, strike, iRate, exactTime],callPrice=optionPrice) if optionType == 'CE' else mibian.BS([currentPrice, strike, iRate, time],putPrice=optionPrice)
+            # optionData["iv"] = round(c.impliedVolatility, 2)
+            resData[key] = {
+                "iv": round(c.impliedVolatility, 2),
+                "exactIv": round(cExact.impliedVolatility, 2)
+            }
+            print(round(c.impliedVolatility, 2))
+            print(round(cExact.impliedVolatility, 2), "d")
+        print("done")
+        return jsonify({
+            "resData":  resData
+        })
+
+    except Exception as e:
+        print(e)
+        return jsonify({
+            "error": "eeplease pass all params: strike, currentPrice,optionPrice, iRate, time "
+        })
+
 
 
 @app.route('/')
 def index():
+    print("here")
     # A welcome message to test our server
     return "<h1>Welcome to our medium-greeting-api!</h1>"
 
 
 if __name__ == '__main__':
     # Threaded option to enable multiple instances for multiple user access support
-    app.run(threaded=True, port=process.env.PORT)
+    port = 8000
+    # try:
+    #     port = process.env.PORT
+    # except:
+    #     print("error port")
+    
+    app.run( port=port)
 
